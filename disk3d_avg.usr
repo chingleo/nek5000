@@ -1,0 +1,1365 @@
+c-----------------------------------------------------------------------
+C
+C  USER SPECIFIED ROUTINES:
+C
+C     - boundary conditions
+C     - initial conditions
+C     - variable properties
+C     - local acceleration for fluid (a)
+C     - forcing function for passive scalar (q)
+C     - general purpose routine for checking errors etc.
+C
+c-----------------------------------------------------------------------
+      subroutine uservp (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e,f,eg
+c     e = gllel(eg)
+
+      udiff =0.
+      utrans=0.
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userf  (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e,f,eg
+c     e = gllel(eg)
+
+
+c     Note: this is an acceleration term, NOT a force!
+c     Thus, ffx will subsequently be multiplied by rho(x,t).
+
+
+      ffx = 0.0
+      ffy = 0.0
+      ffz = temp ! Hot goes up, cold goes down
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userq  (ix,iy,iz,eg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      integer e,f,eg
+c     e = gllel(eg)
+
+      qvol   = 0.0
+      source = 0.0
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userchk
+      include 'SIZE'
+      include 'TOTAL'
+
+      common /avgtime/ timel, atime
+
+      common /chka/  ua(lx1,ly1,lz1,lelt)
+     $             , va(lx1,ly1,lz1,lelt)
+     $             , wa(lx1,ly1,lz1,lelt)
+     $             , pa(lx1,ly1,lz1,lelt)
+     $             , ta(lx1,ly1,lz1,lelt)
+
+     $             , uua(lx1,ly1,lz1,lelt)
+     $             , vva(lx1,ly1,lz1,lelt)
+     $             , wwa(lx1,ly1,lz1,lelt)
+     $             , tta(lx1,ly1,lz1,lelt)
+
+     $             , uta(lx1,ly1,lz1,lelt)
+     $             , vta(lx1,ly1,lz1,lelt)
+     $             , wta(lx1,ly1,lz1,lelt)
+
+     $             , utta(lx1,ly1,lz1,lelt)
+     $             , vtta(lx1,ly1,lz1,lelt)
+     $             , wtta(lx1,ly1,lz1,lelt)
+
+     $             , dudx2a(lx1,ly1,lz1,lelt)
+     $             , dudy2a(lx1,ly1,lz1,lelt)
+     $             , dudz2a(lx1,ly1,lz1,lelt)
+
+     $             , dvdx2a(lx1,ly1,lz1,lelt)
+     $             , dvdy2a(lx1,ly1,lz1,lelt)
+     $             , dvdz2a(lx1,ly1,lz1,lelt)
+
+     $             , dwdx2a(lx1,ly1,lz1,lelt)
+     $             , dwdy2a(lx1,ly1,lz1,lelt)
+     $             , dwdz2a(lx1,ly1,lz1,lelt)
+
+     $             , dtdx2a(lx1,ly1,lz1,lelt)
+     $             , dtdy2a(lx1,ly1,lz1,lelt)
+     $             , dtdz2a(lx1,ly1,lz1,lelt)
+
+     $             , uyvxa(lx1,ly1,lz1,lelt)
+     $             , uzwxa(lx1,ly1,lz1,lelt)
+     $             , vzwya(lx1,ly1,lz1,lelt)
+
+     $             , work(lx1,ly1,lz1,lelt)
+!---------------------------------------------
+!----my column----------------
+     $             ,tx(lx1,ly1,lz1,lelt)
+     $             ,ty(lx1,ly1,lz1,lelt)
+     $             ,tz(lx1,ly1,lz1,lelt)
+     $             ,tn(lx1,ly1,lz1,lelt)
+
+     $             ,txx(lx1,ly1,lz1,lelt)
+     $             ,tyy(lx1,ly1,lz1,lelt)
+     $             ,tzz(lx1,ly1,lz1,lelt)
+
+     $             ,vart(lx1,ly1,lz1,lelt)
+     $             ,vartx(lx1,ly1,lz1,lelt)
+     $             ,varty(lx1,ly1,lz1,lelt)
+     $             ,vartz(lx1,ly1,lz1,lelt)
+     $             ,vartzz(lx1,ly1,lz1,lelt)
+
+
+      integer elem_cold, elem_hot, elem_hc 
+      common /elem/ elem_cold(3,40),
+     $              elem_hot(3,40),
+     $              elem_hc(3,46)
+
+
+      parameter (lt=lx1*ly1*lz1*lelt)
+
+      real theta
+      real flux_t, flux_c, flux_b, flux_h
+      real area_t, area_c, area_b, area_h
+      real work_flux
+      real wt
+
+      integer ex,ey,el,eg,idl
+
+      integer icalld
+      save    icalld
+      data    icalld  /0/
+
+      parameter (n_pt = 100000)
+      real uvwt(4,n_pt),xyz(3,n_pt)
+      real ua_pt(lt,1),va_pt(lt,1),wa_pt(lt,1),wta_pt(lt,1)
+      logical ifjac,ifpts
+
+      common /outtmp/ work_pt(lx1*ly1*lz1*lelt,4)
+      common /rparts/ pts(3*n_pt)
+      common /iv_intp/ ihandle
+      real u1(1,n_pt),v1(1,n_pt),w1(1,n_pt),wt1(1,n_pt)
+
+      character*80 filename(9999)
+
+      n=nx1*ny1*nz1*nelv
+
+C*********************************************************************
+      open(unit=199,file='a1_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      ua=0.
+      va=0.
+      wa=0.
+      pa=0.
+      ta=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          ua(i,1,1,1) = ua(i,1,1,1)+vx(i,1,1,1)
+          va(i,1,1,1) = va(i,1,1,1)+vy(i,1,1,1)
+          wa(i,1,1,1) = wa(i,1,1,1)+vz(i,1,1,1)
+          pa(i,1,1,1) = pa(i,1,1,1)+pr(i,1,1,1)
+          ta(i,1,1,1) = ta(i,1,1,1)+t(i,1,1,1,1)
+        end do
+      end do
+      ua = ua/nfiles
+      va = va/nfiles
+      wa = wa/nfiles
+      pa = pa/nfiles
+      ta = ta/nfiles
+      call outpost( ua, va, wa, pa, ta,'b1_')
+
+
+C*********************************************************************
+      open(unit=199,file='a2_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      uua=0.
+      vva=0.
+      wwa=0.
+      tta=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          uua(i,1,1,1) = uua(i,1,1,1)+vx(i,1,1,1)
+          vva(i,1,1,1) = vva(i,1,1,1)+vy(i,1,1,1)
+          wwa(i,1,1,1) = wwa(i,1,1,1)+vz(i,1,1,1)
+          tta(i,1,1,1) = tta(i,1,1,1)+t(i,1,1,1,1)
+        end do
+      end do
+      uua = uua/nfiles
+      vva = vva/nfiles
+      wwa = wwa/nfiles
+      tta = tta/nfiles
+
+      ifpo = .false.
+      call outpost(uua,vva,wwa,  pr,  tta,'b2_')
+      ifpo = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a3_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      uta=0.
+      vta=0.
+      wta=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          uta(i,1,1,1) = uta(i,1,1,1)+vx(i,1,1,1)
+          vta(i,1,1,1) = vta(i,1,1,1)+vy(i,1,1,1)
+          wta(i,1,1,1) = wta(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      uta = uta/nfiles
+      vta = vta/nfiles
+      wta = wta/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost( uta, vta, wta,  pr,t,  'b3_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a4_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      utta=0.
+      vtta=0.
+      wtta=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          utta(i,1,1,1) = utta(i,1,1,1)+vx(i,1,1,1)
+          vtta(i,1,1,1) = vtta(i,1,1,1)+vy(i,1,1,1)
+          wtta(i,1,1,1) = wtta(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      utta = utta/nfiles
+      vtta = vtta/nfiles
+      wtta = wtta/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost( utta, vtta, wtta,  pr,t,  'b4_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a5_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      dudx2a=0.
+      dudy2a=0.
+      dudz2a=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          dudx2a(i,1,1,1) = dudx2a(i,1,1,1)+vx(i,1,1,1)
+          dudy2a(i,1,1,1) = dudy2a(i,1,1,1)+vy(i,1,1,1)
+          dudz2a(i,1,1,1) = dudz2a(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      dudx2a = dudx2a/nfiles
+      dudy2a = dudy2a/nfiles
+      dudz2a = dudz2a/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost(dudx2a,dudy2a,dudz2a,  pr,t,  'b5_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a6_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      dvdx2a=0.
+      dvdy2a=0.
+      dvdz2a=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          dvdx2a(i,1,1,1) = dvdx2a(i,1,1,1)+vx(i,1,1,1)
+          dvdy2a(i,1,1,1) = dvdy2a(i,1,1,1)+vy(i,1,1,1)
+          dvdz2a(i,1,1,1) = dvdz2a(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      dvdx2a = dvdx2a/nfiles
+      dvdy2a = dvdy2a/nfiles
+      dvdz2a = dvdz2a/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost(dvdx2a,dvdy2a,dvdz2a,  pr,t,  'b6_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a7_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      dwdx2a=0.
+      dwdy2a=0.
+      dwdz2a=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          dwdx2a(i,1,1,1) = dwdx2a(i,1,1,1)+vx(i,1,1,1)
+          dwdy2a(i,1,1,1) = dwdy2a(i,1,1,1)+vy(i,1,1,1)
+          dwdz2a(i,1,1,1) = dwdz2a(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      dwdx2a = dwdx2a/nfiles
+      dwdy2a = dwdy2a/nfiles
+      dwdz2a = dwdz2a/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost(dwdx2a,dwdy2a,dwdz2a,  pr,t,  'b7_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a8_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      dtdx2a=0.
+      dtdy2a=0.
+      dtdz2a=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          dtdx2a(i,1,1,1) = dtdx2a(i,1,1,1)+vx(i,1,1,1)
+          dtdy2a(i,1,1,1) = dtdy2a(i,1,1,1)+vy(i,1,1,1)
+          dtdz2a(i,1,1,1) = dtdz2a(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      dtdx2a = dtdx2a/nfiles
+      dtdy2a = dtdy2a/nfiles
+      dtdz2a = dtdz2a/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost(dtdx2a,dtdy2a,dtdz2a,  pr,t,  'b8_')
+      ifpo = .true.
+      ifto = .true.
+
+
+C*********************************************************************
+      open(unit=199,file='a9_file.list',form='formatted',status='old')
+      read(199,*) nfiles
+      read(199,'(A80)') (filename(i),i=1,nfiles)
+      close(199)
+      uyvxa=0.
+      uzwxa=0.
+      vzwya=0.
+      do ifile = 1, nfiles
+        if (nid.eq.0) then
+        write(*, *) '>>> Loading file:'
+        write(*, *) filename(ifile)
+        end if
+        call load_fld(filename(ifile))
+        do i=1,n
+          uyvxa(i,1,1,1) = uyvxa(i,1,1,1)+vx(i,1,1,1)
+          uzwxa(i,1,1,1) = uzwxa(i,1,1,1)+vy(i,1,1,1)
+          vzwya(i,1,1,1) = vzwya(i,1,1,1)+vz(i,1,1,1)
+        end do
+      end do
+      uyvxa = uyvxa/nfiles
+      uzwxa = uzwxa/nfiles
+      vzwya = vzwya/nfiles
+
+      ifpo = .false.
+      ifto = .false.
+      call outpost(uyvxa,uzwxa,vzwya,  pr,t,  'b9_')
+      ifpo = .true.
+      ifto = .true.
+
+!************************************************************************
+
+      do i = 1, n
+      vart(i,1,1,1) = tta(i,1,1,1) - ta(i,1,1,1)**2
+      end do
+
+      call gradm1(tx,ty,tz,ta)
+      call gradm1(txx,work,work,tx)
+      call gradm1(work,tyy,work,ty)
+      call gradm1(work,work,tzz,tz)
+
+      call gradm1(vartx,work,vartz,vart)
+      call gradm1(work,work,vartzz,vartz)
+
+!----------------output------------------------------
+
+      call pillar()
+
+!      call heat_flux()
+
+c--------------------------------------------
+
+      do i = 1, 5
+        elem_hot(1:3,i) = (/5495-(i-1),
+     &                      5525-(i-1),
+     &                      5555-(i-1)/)
+      end do
+      do i = 1, 30
+        elem_hot(1:3,5+i) = (/4800-(i-1),
+     &                        4830-(i-1),
+     &                        4860-(i-1)/)
+      end do
+      do i = 1, 5
+        elem_hot(1:3,35+i) = (/4080-(i-1),
+     &                         4110-(i-1),
+     &                         4140-(i-1)/)
+      end do
+c--------------------------------------------
+c--------------------------------------------
+      do i = 1, 5
+        elem_cold(1:3,i) = (/4055-(i-1),
+     &                       4085-(i-1),
+     &                       4115-(i-1)/)
+      end do
+      do i = 1, 30
+        elem_cold(1:3,5+i) = (/3397-24*(i-1), 
+     &                         3405-24*(i-1),
+     &                         3413-24*(i-1)/)
+      end do
+      do i = 1, 5
+        elem_cold(1:3,35+i) = (/5520-(i-1),
+     &                          5550-(i-1),
+     &                          5580-(i-1)/)
+      end do
+c--------------------------------------------
+c--------------------------------------------
+      do i = 1, 8
+        elem_hc(1:3,i) = (/5506-90*(i-1),
+     &                     5536-90*(i-1),
+     &                     5566-90*(i-1)/)
+      end do
+      do i = 1, 30
+        elem_hc(1:3,8+i) = (/2626-90*(i-1), 
+     &                       2656-90*(i-1),
+     &                       2686-90*(i-1)/)
+      end do
+      do i = 1, 8
+        elem_hc(1:3,38+i) = (/3435+90*(i-1),
+     &                        3465+90*(i-1),
+     &                        3495+90*(i-1)/)
+      end do
+c--------------------------------------------
+c--------------------------------------------
+
+      do ex = 1, 40
+      do ey = 1, 3  
+          eg = elem_hot(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          do k = 1, lz1
+          do j = 1, ly1
+          do i = 1, lx1
+c-------- theta = -XXX
+	      theta = -acos(xm1(i,j,k,el)
+     &           /dsqrt(xm1(i,j,k,el)**2
+     &                 +zm1(i,j,k,el)**2))
+	      tn(i,j,k,el) = tx(i,j,k,el)*cos(theta)
+     &                  +tz(i,j,k,el)*sin(theta)
+          end do
+          end do
+          end do
+          end if
+      end do
+      end do
+
+      do ex = 1, 40
+      do ey = 1, 3
+          eg = elem_cold(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          do k = 1, lz1
+          do j = 1, ly1
+          do i = 1, lx1
+	      theta = acos(xm1(i,j,k,el)
+     &          /dsqrt(xm1(i,j,k,el)**2
+     &                +zm1(i,j,k,el)**2))
+	      tn(i,j,k,el) = tx(i,j,k,el)*cos(theta)
+     &                  +tz(i,j,k,el)*sin(theta)
+          end do
+          end do
+          end do
+          end if
+      end do
+      end do
+
+
+c--------------------------------------------------
+c total heat flux at the heating and cooling plate
+      flux_b = 0.0d0
+      area_b = 0.0d0
+c-----left
+      do ey = 1, 3
+      do ex = 1, 5
+          eg = elem_hot(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          k = 8
+          do i = 1, lx1-1
+          do j = 1, ly1-1
+            flux_b = flux_b+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_b = area_b + dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+c-----middle
+      do ey = 1, 3
+      do ex = 6, 35
+          eg = elem_hot(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          k = 8
+          do i = 1, lx1-1
+          do j = 1, ly1-1
+            flux_b = flux_b+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_b = area_b + dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+c-----right
+      do ey = 1, 3
+      do ex = 36, 40
+          eg = elem_hot(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          k = 8
+          do i = 1, lx1-1
+          do j = 1, ly1-1
+            flux_b = flux_b+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_b = area_b + dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+c--------------------------------------------------
+
+
+
+      flux_t = 0.0d0
+      area_t = 0.0d0
+c-----left
+      do ey = 1, 3
+      do ex = 1, 5
+          eg = elem_cold(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          k = 8
+          do i = 1, lx1-1
+          do j = 1, ly1-1
+            flux_t = flux_t+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_t = area_t + dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+c-----middle
+      do ey = 1, 3
+      do ex = 6, 35
+          eg = elem_cold(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          j = 1
+          do k = 1, lz1-1
+          do i = 1, lx1-1
+            flux_t = flux_t+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j,k+1,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j,k+1,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_t = area_t + dsqrt((xm1(i,j,k+1,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j,k+1,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+c-----right
+      do ey = 1, 3
+      do ex = 36, 40
+          eg = elem_cold(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          k = 8
+          do i = 1, lx1-1
+          do j = 1, ly1-1
+            flux_t = flux_t+tn(i,j,k,el)
+&                          *dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                          +(zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                          *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+            area_t = area_t + dsqrt((xm1(i,j+1,k,el)-xm1(i,j,k,el))**2
+&                           + (zm1(i,j+1,k,el)-zm1(i,j,k,el))**2)
+&                           *dabs(ym1(i+1,j,k,el)-ym1(i,j,k,el))
+          end do
+          end do
+          end if
+      end do
+      end do
+
+
+
+c--------------------------------------------------
+c total heat flux at the central plane
+
+      kkk = 0
+      do iii = 1, 1000
+      do jjj = 1, 100
+         kkk = kkk +1
+         xyz(1,kkk) = iii/1000. - 0.5
+         xyz(2,kkk) = 0.1*jjj/100.
+         xyz(3,kkk) = 0.
+!         write(20,*) xyz(1,kkk)
+      end do
+      end do
+
+      do i=1,n_pt		
+         pts(i)     = xyz(1,i)
+         pts(i + n_pt) = xyz(2,i)
+         pts(i + n_pt*2) = xyz(3,i)
+!         write(21,*) pts(i)
+      enddo
+
+      if (icalld.eq.0) then		! interpolation setup
+        icalld = 1
+        tolin  = 1.e-8
+        call intpts_setup(tolin,ihandle)
+      endif
+
+
+! pack working array
+!      call opcopy(work2(1,1),work2(1,2),work2(1,3),work2(1,4),
+!     $             ua,va,wa,ta)
+
+       ua_pt = 0.
+       va_pt = 0.
+       wa_pt = 0.
+       wta_pt = 0.
+       do iii = 1, n
+        work_pt(iii,1) = ua(iii,1,1,1)
+        work_pt(iii,2) = va(iii,1,1,1)
+        work_pt(iii,3) = wa(iii,1,1,1)
+        work_pt(iii,4) = wta(iii,1,1,1)
+        ua_pt(iii,1) = ua(iii,1,1,1)
+        va_pt(iii,1) = va(iii,1,1,1)
+        wa_pt(iii,1) = wa(iii,1,1,1)
+        wta_pt(iii,1) = wta(iii,1,1,1)
+       enddo
+
+      ifpo = .false.
+      call outpost(ua_pt,va_pt,wa_pt,  pr,wta_pt,  'wr_')
+      ifpo = .true.
+
+
+! interpolation
+
+      nflds  = 1 ! number of fields to interpolate
+      ifjac = .true.
+      ifpts = .true.
+!      call intpts(work2,nflds,pts,n_pt,uvwt,ifjac,ifpts,ihandle)
+      call intpts(ua_pt,nflds,pts,n_pt,u1,ifjac,ifpts,ihandle)
+      call intpts(va_pt,nflds,pts,n_pt,v1,ifjac,ifpts,ihandle)
+      call intpts(wa_pt,nflds,pts,n_pt,w1,ifjac,ifpts,ihandle)
+      call intpts(wta_pt,nflds,pts,n_pt,wt1,ifjac,ifpts,ihandle)
+
+      flux_c = 0.0d0
+
+      do i=1,n_pt
+C     Update particle and fluid velocity history
+c           u1(1,i) = uvwt(1,i)
+c           v1(1,i) = uvwt(2,i)
+c           w1(1,i) = uvwt(3,i)
+c           t1(1,i) = uvwt(4,i)
+           flux_c = flux_c + wt1(1,i)/param(8)
+c           write(22,*) flux_c
+      enddo
+
+c      ifpo = .false.
+c      call outpost(u1,v1,w1,  pr,wt1,  'out_')
+c      ifpo = .true.
+
+
+c-----horizontal heat flux
+!-------left
+      flux_h = 0.0
+      area_h = 0.0
+      do ex = 1, 8
+      do ey = 1, 3
+          eg = elem_hc(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          j = 1
+          do j = 1, ly1-1
+          do i = 1, lx1-1
+            wt=wa(i,j,k,el)*ta(i,j,k,el)/param(8)
+            flux_h = flux_h + (wt - ta(i,j,j,el))
+     &              *dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                   *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+            area_h = area_h + dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                            *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+          end do
+	  end do
+          end if
+      end do
+      end do
+c-----middle
+      do ex = 9, 38
+      do ey = 1, 3
+          eg = elem_hc(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          j = 1
+          do k = 1, lz1-1
+          do i = 1, lx1-1
+            wt=wa(i,j,k,el)*ta(i,j,k,el)/param(8)
+            flux_h = flux_h + (wt - ta(i,j,j,el))
+     &              *dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                   *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+            area_h = area_h + dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                            *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+          end do
+          end do
+          end if
+      end do
+      end do
+c-----right
+      do ex = 39, 46
+      do ey = 1, 3
+          eg = elem_hc(ey,ex)
+          el = gllel(eg)
+          idl = gllnid(eg)
+          if (nid.eq.idl) then
+          j = 8
+          do k = 1, lz1-1
+          do i = 1, lx1-1
+            wt=wa(i,j,k,el)*ta(i,j,k,el)/param(8)
+            flux_h = flux_h + (wt - ta(i,j,j,el))
+     &              *dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                   *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+            area_h = area_h + dabs((xm1(i,j,k+1,el)-xm1(i,j,k,el))
+     &                            *(ym1(i+1,j,k,el)-ym1(i,j,k,el)))
+          end do
+          end do
+          end if
+      end do
+      end do
+  
+
+c-----gather to id0
+      call gop(flux_b,work_flux,'+  ',1)
+      call gop(flux_c,work_flux,'+  ',1)
+      call gop(flux_t,work_flux,'+  ',1)
+      call gop(flux_h,work_flux,'+  ',1)
+
+      call gop(area_b,work_flux,'+  ',1)
+      call gop(area_c,work_flux,'+  ',1)
+      call gop(area_t,work_flux,'+  ',1)
+      call gop(area_h,work_flux,'+  ',1)
+
+      if (nid.eq.0) then
+      open(10,file='bot_cen_top_cenh.dat',position='append')
+      write(10,*)'area_b,area_c,area_t,area_horizon'
+      write(10,'(4e24.15)') area_b, area_c,area_t, area_h
+      write(10,*)'flux_b,flux_c,flux_t,flux_horizon'
+      write(10,'(4e24.15)') flux_b, flux_c, flux_t,flux_h
+      close(10)
+      end if
+
+
+      call reynold_number()
+
+      call exitt
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine userbc (ix,iy,iz,iside,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      ux=0.0
+      uy=0.0
+      uz=0.0
+      if (z.lt.0) temp = 0.5
+      if (z.gt.0) temp = -0.5
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine useric (ix,iy,iz,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+      ux=0.0
+      uy=0.0
+      uz=0.0
+      temp=0.0
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat
+      include 'SIZE'
+      include 'TOTAL'
+c
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat3
+      include 'SIZE'
+      include 'TOTAL'
+c
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine usrdat2
+      include 'SIZE'
+      include 'TOTAL'
+c
+      return
+      end
+c-----------------------------------------------------------------------
+c-----------------------------------------------------------------------
+      subroutine pillar
+      include 'SIZE'
+      include 'TOTAL'
+
+
+      common /chka/  ua(lx1,ly1,lz1,lelt)
+     $             , va(lx1,ly1,lz1,lelt)
+     $             , wa(lx1,ly1,lz1,lelt)
+     $             , pa(lx1,ly1,lz1,lelt)
+     $             , ta(lx1,ly1,lz1,lelt)
+
+     $             , uua(lx1,ly1,lz1,lelt)
+     $             , vva(lx1,ly1,lz1,lelt)
+     $             , wwa(lx1,ly1,lz1,lelt)
+     $             , tta(lx1,ly1,lz1,lelt)
+
+     $             , uta(lx1,ly1,lz1,lelt)
+     $             , vta(lx1,ly1,lz1,lelt)
+     $             , wta(lx1,ly1,lz1,lelt)
+
+     $             , utta(lx1,ly1,lz1,lelt)
+     $             , vtta(lx1,ly1,lz1,lelt)
+     $             , wtta(lx1,ly1,lz1,lelt)
+
+     $             , dudx2a(lx1,ly1,lz1,lelt)
+     $             , dudy2a(lx1,ly1,lz1,lelt)
+     $             , dudz2a(lx1,ly1,lz1,lelt)
+
+     $             , dvdx2a(lx1,ly1,lz1,lelt)
+     $             , dvdy2a(lx1,ly1,lz1,lelt)
+     $             , dvdz2a(lx1,ly1,lz1,lelt)
+
+     $             , dwdx2a(lx1,ly1,lz1,lelt)
+     $             , dwdy2a(lx1,ly1,lz1,lelt)
+     $             , dwdz2a(lx1,ly1,lz1,lelt)
+
+     $             , dtdx2a(lx1,ly1,lz1,lelt)
+     $             , dtdy2a(lx1,ly1,lz1,lelt)
+     $             , dtdz2a(lx1,ly1,lz1,lelt)
+
+     $             , uyvxa(lx1,ly1,lz1,lelt)
+     $             , uzwxa(lx1,ly1,lz1,lelt)
+     $             , vzwya(lx1,ly1,lz1,lelt)
+
+     $             , work(lx1,ly1,lz1,lelt)
+!---------------------------------------------
+!----my column----------------
+     $             ,tx(lx1,ly1,lz1,lelt)
+     $             ,ty(lx1,ly1,lz1,lelt)
+     $             ,tz(lx1,ly1,lz1,lelt)
+     $             ,tn(lx1,ly1,lz1,lelt)
+
+     $             ,txx(lx1,ly1,lz1,lelt)
+     $             ,tyy(lx1,ly1,lz1,lelt)
+     $             ,tzz(lx1,ly1,lz1,lelt)
+
+     $             ,vart(lx1,ly1,lz1,lelt)
+     $             ,vartx(lx1,ly1,lz1,lelt)
+     $             ,varty(lx1,ly1,lz1,lelt)
+     $             ,vartz(lx1,ly1,lz1,lelt)
+     $             ,vartzz(lx1,ly1,lz1,lelt)
+
+!****************************************************
+      parameter (pillar_ne = 46)
+
+      integer elem_pillar
+      common /elem/ elem_pillar(1,46)
+
+      common /newdat/ xnew(lx1,ly1,lz1,pillar_ne)
+     $              , ynew(lx1,ly1,lz1,pillar_ne)
+     $              , znew(lx1,ly1,lz1,pillar_ne)
+
+     $              , unew(lx1,ly1,lz1,pillar_ne)
+     $              , vnew(lx1,ly1,lz1,pillar_ne)
+     $              , wnew(lx1,ly1,lz1,pillar_ne)
+     $              , pnew(lx1,ly1,lz1,pillar_ne)
+     $              , tnew(lx1,ly1,lz1,pillar_ne)
+
+     $              , uunew(lx1,ly1,lz1,pillar_ne)
+     $              , vvnew(lx1,ly1,lz1,pillar_ne)
+     $              , wwnew(lx1,ly1,lz1,pillar_ne)
+     $              , ttnew(lx1,ly1,lz1,pillar_ne)
+ 
+     $              , utnew(lx1,ly1,lz1,pillar_ne)
+     $              , vtnew(lx1,ly1,lz1,pillar_ne)
+     $              , wtnew(lx1,ly1,lz1,pillar_ne)
+
+     $              , uttnew(lx1,ly1,lz1,pillar_ne)
+     $              , vttnew(lx1,ly1,lz1,pillar_ne)
+     $              , wttnew(lx1,ly1,lz1,pillar_ne)
+
+     $              , ux2new(lx1,ly1,lz1,pillar_ne)
+     $              , uy2new(lx1,ly1,lz1,pillar_ne)
+     $              , uz2new(lx1,ly1,lz1,pillar_ne)
+
+     $              , vx2new(lx1,ly1,lz1,pillar_ne)
+     $              , vy2new(lx1,ly1,lz1,pillar_ne)
+     $              , vz2new(lx1,ly1,lz1,pillar_ne)
+
+     $              , wx2new(lx1,ly1,lz1,pillar_ne)
+     $              , wy2new(lx1,ly1,lz1,pillar_ne)
+     $              , wz2new(lx1,ly1,lz1,pillar_ne)
+
+     $              , tx2new(lx1,ly1,lz1,pillar_ne)
+     $              , ty2new(lx1,ly1,lz1,pillar_ne)
+     $              , tz2new(lx1,ly1,lz1,pillar_ne)
+
+     $              ,txnew(lx1,ly1,lz1,pillar_ne)
+     $              ,tynew(lx1,ly1,lz1,pillar_ne)
+     $              ,tznew(lx1,ly1,lz1,pillar_ne)
+
+     $              ,txxnew(lx1,ly1,lz1,pillar_ne)
+     $              ,tyynew(lx1,ly1,lz1,pillar_ne)
+     $              ,tzznew(lx1,ly1,lz1,pillar_ne)
+
+     $              ,vartxnew(lx1,ly1,lz1,pillar_ne)
+     $              ,vartynew(lx1,ly1,lz1,pillar_ne)
+     $              ,vartznew(lx1,ly1,lz1,pillar_ne)
+
+     $              ,vartxxnew(lx1,ly1,lz1,pillar_ne)
+     $              ,vartzznew(lx1,ly1,lz1,pillar_ne)
+ 
+     $              , work2(lx1,ly1,lz1,pillar_ne)
+!********************************************************
+
+      do i = 1, 8
+        elem_pillar(1:1,i) = (/4816-90*(i-1)/)
+      end do
+
+      do i = 1, 30
+        elem_pillar(1:1,8+i) = (/1381+(i-1)/)
+      end do
+
+      do i = 1, 8
+        elem_pillar(1:1,38+i) = (/3052-(i-1)/)
+      end do
+
+!================================
+
+      e=0
+      do ez = 1, 46
+      do ey = 1, 1
+        e=e+1
+        idl=gllnid(elem_pillar(ey,ez))
+        if (idl.eq.nid) then
+        el=gllel(elem_pillar(ey,ez))
+        do k = 1, lz1
+          do j = 1, ly1
+            do i = 1, lx1
+
+              xnew(i,j,k,e)=xm1(i,j,k,el)
+              ynew(i,j,k,e)=ym1(i,j,k,el)
+              znew(i,j,k,e)=zm1(i,j,k,el)
+
+              unew(i,j,k,e)=ua(i,j,k,el)
+              vnew(i,j,k,e)=va(i,j,k,el)
+              wnew(i,j,k,e)=wa(i,j,k,el)
+              tnew(i,j,k,e)=ta(i,j,k,el)
+
+              uunew(i,j,k,e)=uua(i,j,k,el)
+              vvnew(i,j,k,e)=vva(i,j,k,el)
+              wwnew(i,j,k,e)=wwa(i,j,k,el)
+              ttnew(i,j,k,e)=tta(i,j,k,el)
+
+              utnew(i,j,k,e)=uta(i,j,k,el)
+              vtnew(i,j,k,e)=vta(i,j,k,el)
+              wtnew(i,j,k,e)=wta(i,j,k,el)
+
+              uttnew(i,j,k,e)=utta(i,j,k,el)
+              vttnew(i,j,k,e)=vtta(i,j,k,el)
+              wttnew(i,j,k,e)=wtta(i,j,k,el)
+
+              txnew(i,j,k,e)=tx(i,j,k,el)
+              tynew(i,j,k,e)=ty(i,j,k,el)
+              tznew(i,j,k,e)=tz(i,j,k,el)
+
+!              utxnew(i,j,k,e)=ut_x(i,j,k,el)
+!              vtynew(i,j,k,e)=vt_y(i,j,k,el)
+!              wtznew(i,j,k,e)=wt_z(i,j,k,el)
+
+!              ttxnew(i,j,k,e)=tt_x(i,j,k,el)
+!              ttynew(i,j,k,e)=tt_y(i,j,k,el)
+!              ttznew(i,j,k,e)=tt_z(i,j,k,el)
+
+!              uttxnew(i,j,k,e)=utt_x(i,j,k,el)
+!              vttynew(i,j,k,e)=vtt_y(i,j,k,el)
+!              wttznew(i,j,k,e)=wtt_z(i,j,k,el)
+
+              txxnew(i,j,k,e)=txx(i,j,k,el)
+              tyynew(i,j,k,e)=tyy(i,j,k,el)
+              tzznew(i,j,k,e)=tzz(i,j,k,el)
+
+!              ttxxnew(i,j,k,e)=tt_xx(i,j,k,el)
+!              ttyynew(i,j,k,e)=tt_yy(i,j,k,el)
+!              ttzznew(i,j,k,e)=tt_zz(i,j,k,el)
+
+              ux2new(i,j,k,e)=dudx2a(i,j,k,el)
+              uy2new(i,j,k,e)=dudy2a(i,j,k,el)
+              uz2new(i,j,k,e)=dudz2a(i,j,k,el)
+
+              vx2new(i,j,k,e)=dvdx2a(i,j,k,el)
+              vy2new(i,j,k,e)=dvdy2a(i,j,k,el)
+              vz2new(i,j,k,e)=dvdz2a(i,j,k,el)
+
+              wx2new(i,j,k,e)=dwdx2a(i,j,k,el)
+              wy2new(i,j,k,e)=dwdy2a(i,j,k,el)
+              wz2new(i,j,k,e)=dwdz2a(i,j,k,el)
+
+              tx2new(i,j,k,e)=dtdx2a(i,j,k,el)
+              ty2new(i,j,k,e)=dtdy2a(i,j,k,el)
+              tz2new(i,j,k,e)=dtdz2a(i,j,k,el)
+
+c---------------
+!              uxnew(i,j,k,e)=u_x(i,j,k,el)
+!              uynew(i,j,k,e)=u_y(i,j,k,el)
+!              uznew(i,j,k,e)=u_z(i,j,k,el)
+
+!              pxnew(i,j,k,e)=p_x(i,j,k,el)
+!              pynew(i,j,k,e)=p_y(i,j,k,el)
+!              pznew(i,j,k,e)=p_z(i,j,k,el)
+
+!              uuxnew(i,j,k,e)=uu_x(i,j,k,el)
+!              uvynew(i,j,k,e)=uv_y(i,j,k,el)
+!              uwznew(i,j,k,e)=uw_z(i,j,k,el)
+
+!              uxxnew(i,j,k,e)=u_xx(i,j,k,el)
+!              uyynew(i,j,k,e)=u_yy(i,j,k,el)
+!              uzznew(i,j,k,e)=u_zz(i,j,k,el)
+c---------------
+
+!              wxnew(i,j,k,e)=w_x(i,j,k,el)
+!              wynew(i,j,k,e)=w_y(i,j,k,el)
+!              wznew(i,j,k,e)=w_z(i,j,k,el)
+
+!===============================
+               vartxnew(i,j,k,e) = vartx(i,j,k,el)
+               vartznew(i,j,k,e) = vartz(i,j,k,el)
+               vartzznew(i,j,k,e) = vartzz(i,j,k,el)
+
+            end do
+          end do
+        end do
+        end if
+      end do
+      end do
+
+      call gop(xnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(ynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(znew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(unew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(uunew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vvnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wwnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(ttnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(utnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vtnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wtnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(uttnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vttnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wttnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(txnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(utxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(vtynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(wtznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(ttxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(ttynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(ttznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(uttxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(vttynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(wttznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+
+      call gop(txxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tyynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tzznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(ttxxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(ttyynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(ttzznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+
+      call gop(ux2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(uy2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(uz2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(vx2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vy2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(vz2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(wx2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wy2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(wz2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      call gop(tx2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(ty2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+      call gop(tz2new,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(uxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(uuxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uvynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uwznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(uxxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uyynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(uzznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(pxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(pynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(pznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+!      call gop(wxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(wynew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+!      call gop(wznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+       call gop(vartxnew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+       call gop(vartznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+       call gop(vartzznew,work2,'+  ',lx1*ly1*lz1*pillar_ne)
+
+      if(nid.eq.0) then
+
+        open(10,file='c00_x_y_z.bin',form='unformatted')
+        open(11,file='c01_u_v_w_t.bin',form='unformatted')
+        open(12,file='c02_uu_vv_ww_tt.bin',form='unformatted')
+        open(13,file='c03_ut_vt_wt.bin',form='unformatted')
+        open(14,file='c04_utt_vtt_wtt.bin',form='unformatted')
+        open(15,file='c05_tx_ty_tz.bin',form='unformatted')
+!        open(16,file='c06_utx_vty_wtz.bin',form='unformatted')
+!        open(17,file='c07_ttx_tty_ttz.bin',form='unformatted')
+!        open(18,file='c08_uttx_vtty_wttz.bin',form='unformatted')
+        open(19,file='c09_txx_tyy_tzz.bin',form='unformatted')
+        open(20,file='c10_ttxx_ttyy_ttzz.bin',form='unformatted')
+        open(21,file='c11_ux2_uy2_uz2.bin',form='unformatted')
+        open(22,file='c12_vx2_vy2_vz2.bin',form='unformatted')
+        open(23,file='c13_wx2_wy2_wz2.bin',form='unformatted')
+        open(24,file='c14_tx2_ty2_tz2.bin',form='unformatted')
+!        open(25,file='c15_ux_uy_uz.bin',form='unformatted')
+!        open(26,file='c16_uux_uvy_uwz.bin',form='unformatted')
+!        open(27,file='c17_uxx_uyy_uzz.bin',form='unformatted')
+!        open(28,file='c18_px_py_pz.bin',form='unformatted')
+!        open(29,file='c19_wx_wy_wz.bin',form='unformatted')
+        open(30,file='c20_vartx_vartz_vartzz.bin',form='unformatted')
+
+
+        write(10) xnew,ynew,znew
+        write(11) unew,vnew,wnew,tnew
+        write(12) uunew,vvnew,wwnew,ttnew
+        write(13) utnew,vtnew,wtnew
+        write(14) uttnew,vttnew,wttnew
+        write(15) txnew,tynew,tznew
+ !       write(16) utxnew,vtynew,wtznew
+ !       write(17) ttxnew,ttynew,ttznew
+ !       write(18) uttxnew,vttynew,wttznew
+        write(19) txxnew,tyynew,tzznew
+ !       write(20) ttxxnew,ttyynew,ttzznew
+        write(21) ux2new,uy2new,uz2new
+        write(22) vx2new,vy2new,vz2new
+        write(23) wx2new,wy2new,wz2new
+        write(24) tx2new,ty2new,tz2new
+ !       write(25) uxnew,uynew,uznew
+ !       write(26) uuxnew,uvynew,uwznew
+ !       write(27) uxxnew,uyynew,uzznew
+ !       write(28) pxnew,pynew,pznew
+ !       write(29) wxnew,wynew,wznew
+        write(30) vartxnew,vartznew,vartzznew
+
+
+      end if
+
+      return
+      end
+
+
+
+
+c-----------------------------------------------------------------------
+c-----------------------------------------------------------------------
+      subroutine reynold_number
+      include 'SIZE'
+      include 'TOTAL'
+
+      common /chka/  ua(lx1,ly1,lz1,lelt)
+     $             , va(lx1,ly1,lz1,lelt)
+     $             , wa(lx1,ly1,lz1,lelt)
+     $             , pa(lx1,ly1,lz1,lelt)
+     $             , ta(lx1,ly1,lz1,lelt)
+
+     $             , uua(lx1,ly1,lz1,lelt)
+     $             , vva(lx1,ly1,lz1,lelt)
+     $             , wwa(lx1,ly1,lz1,lelt)
+     $             , tta(lx1,ly1,lz1,lelt)
+ 
+
+      real re_a, work_re
+      real uu(lx1,ly1,lz1,lelt)
+
+
+      n = lx1*ly1*lz1*lelt
+
+      re_a = 0.
+      uu   = 0.
+      do e = 1,lelt
+      do k = 1,lz1
+      do j = 1,ly1
+      do i = 1,lx1
+        uu(i,j,k,e) = uua(i,j,k,e) + vva(i,j,k,e) + wwa(i,j,k,e)
+        re_a = re_a + sqrt(uu(i,j,k,e))/param(2)
+      end do
+      end do
+      end do
+      end do
+      re_a = re_a/n
+
+c-----gather to id0
+      call gop(re_a,work_re,'+  ',1)
+
+      if (nid.eq.0) then
+      open(10,file='re.dat',position='append')
+      write(10,'(1e24.15)') re_a
+      close(10)
+      end if
+
+      return
+      end
+c-----------------------------------------------------------------------
+
+
